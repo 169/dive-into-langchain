@@ -1,0 +1,243 @@
+在使用大语言模型的时候，无论是用Langchain还是直接用对应模型的API，都会遇到大语言模型的输出的解析问题。就拿OpenAI模型来说，看如下几个例子:
+
+```
+In : from langchain_openai import OpenAI
+
+In : llm = OpenAI()
+
+In : llm.invoke("tell me 1 + 1 equal?")
+Out: '\n1 + 1 equals 2.'
+
+In : llm.invoke("tell me 3 animal names?")
+Out: '\n\n1. Lion\n2. Elephant\n3. Giraffe'
+
+In : llm.invoke("give me a json data, keys: a, b, value use int")
+Out: '\n\n{\n  "a": 5,\n  "b": 10\n}'
+```
+
+这里有三个例子，相应的内容不能直接使用。第一个例子我只需要结果2这个值，第二个例子我希望直接转换成一个Python的列表，第三个例子我希望转化成一个JSON结构，也就是字典。
+
+如果直接用OpenAI的SDK，返回还会包在一个特定的实例里，虽然整体内容也是字符串。如果你真的要用到返回值，通常需要进行结构化、格式化或解析。我总结解析有如下三类:
+
+1. 将非结构化文本转换为结构化数据。例如，将文本解析为 JSON 或 Python 对象
+2. 截取部分。只解析其中部分内容
+3. 自定义处理。在提示中注入指令，告诉语言模型如何格式化其响应。解析器可以提供返回提示文本的 `get_format_instructions()` 方法
+### StrOutputParser
+
+接下来看一下最常见的StrOutputParser，其实它的解析什么也没有做, 就是把响应的字符串返回:
+
+```
+from langchain_core.output_parsers import StrOutputParser
+
+StrOutputParser().parse("a string")
+```
+
+了解解析器的最简单办法就是用它的`parse` 方法。这个组件是独立的，不想Langchain里面其他的组件，需要使用langchain时用，解析器是可以独立使用的。
+
+### OutputParser对象
+
+接着了解一下这种解析器对象都需要有什么。
+
+我找了个典型的按逗号分隔成列表的解析器 `CommaSeparatedListOutputParser`:
+
+```
+class CommaSeparatedListOutputParser(ListOutputParser):
+    """Parse the output of an LLM call to a comma-separated list."""
+
+    @classmethod
+    def is_lc_serializable(cls) -> bool:
+        return True
+
+    @classmethod
+    def get_lc_namespace(cls) -> List[str]:
+        """Get the namespace of the langchain object."""
+        return ["langchain", "output_parsers", "list"]
+
+    def get_format_instructions(self) -> str:
+        return (
+            "Your response should be a list of comma separated values, "
+            "eg: `foo, bar, baz` or `foo,bar,baz`"
+        )
+
+    def parse(self, text: str) -> List[str]:
+        """Parse the output of an LLM call."""
+        return [part.strip() for part in text.split(",")]
+
+    @property
+    def _type(self) -> str:
+        return "comma-separated-list"
+```
+
+也就是说，它需要继承一个OutputParser的基类，再添加五个方法，分别明确他是否可以被序列化，命名空间，格式化的指令，具体的如何解析和类型。其中 `get_format_instructions`和`parse` 方法是最核心的，我们需要关注他们的实现逻辑。
+
+在这里我要非常着重的提醒一下，如果你想实现一个非常准确完善的解析器，除了解析方法，还要注意写好指令，让大语言模型能按照你的要求给你正确的格式，要不然就解析不到本来预期的格式了。
+
+接着我们先了解一下常用的几个解析器。
+
+### PydanticOutputParser
+
+Pydantic是用于现在主流的数据验证的库，它设计了自己的模型定义方法，我们就借用它实现确保输出符合特定架构，从而更容易在应用程序中解析和使用。
+
+```
+In : from langchain.output_parsers import PydanticOutputParser
+...: from langchain_core.pydantic_v1 import BaseModel, Field
+...: class Joke(BaseModel):
+...:     setup: str = Field(description="question to set up a joke")
+...:     punchline: str = Field(description="answer to resolve the joke")
+...: parser = PydanticOutputParser(pydantic_object=Joke)
+...: prompt = PromptTemplate(
+...:     template="Answer the user query.\n{format_instructions}\n{query}\n",
+...:     input_variables=["query"],
+...:     partial_variables={"format_instructions": parser.get_format_instructions()},
+...: )
+...: chain = prompt | model | parser
+...: chain.invoke({"query": "Tell me a joke."})
+Out: Joke(setup="Why couldn't the bicycle stand up by itself?", punchline='Because it was two tired!')
+
+In : parser.get_format_instructions()
+Out: 'The output should be formatted as a JSON instance that conforms to the JSON schema below.\n\nAs an example, for the schema {"properties": {"foo": {"title": "Foo", "description": "a list of strings", "type": "array", "items": {"type": "string"}}}, "required": ["foo"]}\nthe object {"foo": ["bar", "baz"]} is a well-formatted instance of the schema. The object {"properties": {"foo": ["bar", "baz"]}} is not well-formatted.\n\nHere is the output schema:\n```\n{"properties": {"setup": {"title": "Setup", "description": "question to set up a joke", "type": "string"}, "punchline": {"title": "Punchline", "description": "answer to resolve the joke", "type": "string"}}, "required": ["setup", "punchline"]}\n```'
+```
+
+Pydantic里的BaseModel类似于Python标准库的dataclass模块里的实现，但额外具有实现的强制类型检查。在这里就是定义返回的数据的格式有2个键，分别是setup和punchline。模版的用法稍微有点不普通，需要在提示中对指令的格式做了具体的要求，其实也是使用解析器自带的。这样可以更好的约束。`partial_variables`的意思是先传入部分已知的变量，所以最终invoke时只需要传入query即可。最终可以看到解析器返回了一个Joke实例，并把对应的值写到对应的键里。
+### JsonOutputParser
+
+在我的实际应用中有很大程度情况下返回数据都需要是JSON类型，看看要怎么写呢？其实和前面的例子的代码很像，就是换个解析器:
+
+```
+In : from langchain_core.output_parsers import JsonOutputParser
+...: class Joke(BaseModel):
+...:     setup: str = Field(description="question to set up a joke")
+...:     punchline: str = Field(description="answer to resolve the joke")
+...: parser = JsonOutputParser(pydantic_object=Joke)
+...: prompt = PromptTemplate(
+...:     template="Answer the user query.\n{format_instructions}\n{query}\n",
+...:     input_variables=["query"],
+...:     partial_variables={"format_instructions": parser.get_format_instructions()},
+...: )
+...:
+...: chain = prompt | model | parser
+...: chain.invoke({"query": "Tell me a joke."})
+Out:
+{'setup': "Why couldn't the bicycle find its way home?",
+ 'punchline': 'Because it lost its bearings!'}
+```
+
+可以看到唯一的区别就是返回的数据的格式。
+### ResponseSchema+StructuredOutputParser
+
+想要返回多个字段也可以使用此输出解析器。虽然 Pydantic/JSON 解析器更强大，但这对于功能较弱的模型这很有用。
+
+```
+In : from langchain_openai import OpenAI
+...: from langchain.output_parsers import ResponseSchema, StructuredOutputParser
+...: from langchain.prompts import PromptTemplate
+...: output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
+...: prompt = PromptTemplate(
+...:     template="Answer the user query.\n{format_instructions}\n{query}\n",
+...:     input_variables=["query"],
+...:     partial_variables={"format_instructions": output_parser.get_format_instructions()},
+...: )
+...: chain = prompt | OpenAI() | output_parser
+...: chain.invoke({"query": "Tell me a joke."})
+Out:
+{'setup': "Why couldn't the bicycle stand up by itself?",
+ 'punchline': 'Because it was two-tired.'}
+In : output_parser.get_format_instructions()
+Out: 'The output should be a markdown code snippet formatted in the following schema, including the leading and trailing "```json" and "```":\n\n```json\n{\n\t"setup": string  // question to set up a joke\n\t"punchline": string  // answer to resolve the joke\n}\n```'
+```
+
+我还是从前面的例子中改造，首先创建schema，然后用StructuredOutputParser创建解析器，其中主要的还是改了指令，约束了输出的格式。
+
+项目还有很多其他的解析器，我就一一列举了，你可以官方或者从代码里直接找到。另外解析器也支持流式输出，但目前应用的场景很少我这节就不列出了，有兴趣的朋友可以自己看官方了解。
+
+### 自定义解析器
+
+目前有两种方法可以实现自定义解析器:
+
+1. 在LCEL里使用RunnableLambda或者RunnableGenerator。这个是推荐的方法，不过需要你对LCEL比较了解。
+2. 从解析器基类中继承。现在被定义出来的解析器都是这样的。
+
+#### LCEL体系下的解析器
+
+我们拿一开始说的一加一等于2这个例子来说:
+
+```
+In : llm = OpenAI()
+
+In : llm.invoke("tell me 1 + 1 equal?")
+Out: '\n\n1 + 1 equals 2.'
+
+In : def get_result(s):
+...:     return int(s.split('equals')[1].strip().replace('.', ''))
+...:
+
+In : chain = OpenAI() | get_result
+
+In : chain.invoke("tell me 1 + 1 equal?")
+Out: 2
+```
+
+我们简单定义了这个叫做 `get_result` 的函数，在合并操作符的实现里会自动包装成一个RunnableLambda。然后放在chain里就会解析出结果
+#### 自定义标准解析器
+
+自定义解析器除了继承还需要至少实现parse方法。回到一开始提的三个例子中的另外2个，咱们看看怎么实现它。
+
+首先是第二个需求。其实如果你对langchain熟悉，其实里面已经实现这个格式的解析:
+
+```
+In : from langchain_core.output_parsers import NumberedListOutputParser
+
+In : resp = '\n\n1. Lion\n2. Elephant\n3. Giraffe'
+
+In : NumberedListOutputParser().parse(resp)
+Out: ['Lion', 'Elephant', 'Giraffe']
+```
+
+如果你尝试自定义，可以对比一下实现的区别。
+
+然后是第三个需求，把数据解析成一个json。先看我的完成版本:
+
+```
+class MyJsonOutputParser(BaseTransformOutputParser[str]):
+
+    @classmethod
+    def is_lc_serializable(cls) -> bool:
+        return True
+
+    @classmethod
+    def get_lc_namespace(cls) -> List[str]:
+        return ["langchain", "schema", "output_parser"]
+
+    @property
+    def _type(self) -> str:
+        return "default"
+
+    def parse(self, text: str) -> str:
+        match = re.search(r"\{(.*)\}", text.strip().replace("\n", "")).group()
+        return json.loads(match) if match else None
+```
+
+注意我并没有实现`get_format_instructions`方法，因为现在的prompt里面已经对schema做了约束，OpenAI已经理解了。所以在invoke时也就不需要再组织语言额外描述，我们看一下调用:
+
+```
+In : MyJsonOutputParser().parse('\n\n{\n  "a": 5,\n  "b": 10\n}')
+Out: {'a': 5, 'b': 10}
+
+In : chain = llm | MyJsonOutputParser()
+
+In : chain.invoke("give me a json data, keys: a, b, value use int")
+Out: {'a': 5, 'b': 10}
+
+In : chain.invoke("give me a json data, keys: a, b, value use int")
+Out: {'a': 1, 'b': 2}
+```
+
+可以看到通过正则能把返回结果解析成Python的字典对象了。
+### ## Function calling
+
+如果你是用的模型支持Function calling，可以不使用解析器，而是直接规定他的输出格式，这是另外一个解决方案。在其他篇会专门展开。
+
+### 延伸阅读
+
+1. https://docs.pydantic.dev/latest/
+2. https://python.langchain.com/v0.1/docs/modules/model_io/output_parsers/types/csv/

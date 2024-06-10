@@ -1,0 +1,165 @@
+在实际使用中，往往无法一开始就完整的准备好请求大语言模型的提示语，最好的实践是用提示模版，可以按照需要动态的生成提示语。在langchain里最常见的就是PromptTemplate:
+
+```
+In : from langchain_core.prompts import PromptTemplate
+...:
+
+In : prompt = PromptTemplate.from_template("Say {foo}")
+...: prompt.format(foo="bar")
+Out: 'Say bar'
+```
+
+模版在Python语言里也有内置，现在langchain使用的模版格式默认是Python 3.6引入的f-string:
+
+```
+In : name = "Jane"
+
+In : age = 25
+
+In : f"Hello, {name}! You're {age} years old."
+Out: "Hello, Jane! You're 25 years old."
+```
+
+它们的语法特点是现在字符串里用一个大括号括起来的变量占位，在计算时传入变量的值就可以获取完整内容。
+### 局部化
+
+在前面已经看到模版的用法，一开始设置一个提示模版，然后最终传入全部参数。但是它还可以更灵活，可以使用partial函数来一步步填充参数。
+
+```
+In : prompt = PromptTemplate.from_template("Hello, {name}! You're {age} years old.")
+
+In : partial_prompt = prompt.partial(name="Bob")
+
+In : partial_prompt.format(age=25)
+Out: "Hello, Bob! You're 25 years old."
+```
+
+使用`partial`方法就可以让name的参数先传入进去，然后在最终只传递age参数就可以了。另外 `partial` 也支持传入函数，因为有时候虽然局部传递了某个或者某些参数，但是需要再最终format时候才计算。我们看个例子:
+
+```
+from datetime import datetime
+
+
+def _get_datetime():
+    now = datetime.now()
+    return now.strftime("%m/%d/%Y, %H:%M:%S")
+
+
+prompt = PromptTemplate(
+    template="Tell me a {adjective} joke about the day {date}",
+    input_variables=["adjective", "date"],
+)
+partial_prompt = prompt.partial(date=_get_datetime)
+# partial_prompt = prompt.partial(date=_get_datetime())
+print(partial_prompt.format(adjective="funny"))
+```
+
+这个里面里date变量的值是在format时才获取的。如果改成注释的这句，就变成执行到这里时就执行，而不是等到format时，这是一个重大的区别，大家需要注意和理解。另外下面的代码和上面例子效果一样:
+
+```
+prompt = PromptTemplate(
+    template="Tell me a {adjective} joke about the day {date}",
+    input_variables=["adjective"],
+    partial_variables={"date": _get_datetime},
+)
+print(prompt.format(adjective="funny"))
+```
+这里没有使用 `partial` 方法，而是在初始化时直接使用 `partial_variables` 告诉模版中date的值要怎么获得。
+### 其他类型的PromptTemplate
+
+除了PromptTemplate，还有几类提示模版需要我们了解。
+
+#### ChatPromptTemplate
+
+首先是聊天提示模板。我们知道PromptTemplate其实就是字符串模版，而聊天模板会更复杂，因为对话里会多重角色，如系统、用户、助手等。ChatPromptTemplate 由一系列聊天消息组成，每条消息都是一对角色和消息。聊天模型将这些消息作为输入并返回消息作为输出。下面是 ChatPromptTemplate 的示例:
+
+```
+In : from langchain_core.prompts import ChatPromptTemplate
+...:
+...: chat_template = ChatPromptTemplate.from_messages(
+...:     [
+...:         ("system", "You are a helpful AI bot. Your name is {name}."),
+...:         ("human", "Hello, how are you doing?"),
+...:         ("ai", "I'm doing well, thanks!"),
+...:         ("human", "{user_input}"),
+...:     ]
+...: )
+...:
+...: messages = chat_template.format_messages(name="Bob", user_input="What is your name?")
+
+In : messages
+Out:
+[SystemMessage(content='You are a helpful AI bot. Your name is Bob.'),
+ HumanMessage(content='Hello, how are you doing?'),
+ AIMessage(content="I'm doing well, thanks!"),
+ HumanMessage(content='What is your name?')]
+```
+在这个例子里有系统消息，用户消息和助手消息。另外变量也可以出现在这组消息中任何位置，例如这里在系统和用户消息中都有变量。
+
+当然Chat类型的消息会有一些限制，例如上面这组，首先系统消息是可选的，但如果有，则必须是第一条消息，然后是人类的信息必须是最后的信息，还有角色必须是可选的，且不允许有2个连续的Human或AI消息，这个约束在使用中用错了会提示你。
+#### ChatMessagePromptTemplate
+
+前面的ChatPromptTemplate生成的消息属于内置的消息类型，我们还可以自定义其他角色:
+
+```
+In : from langchain_core.prompts import ChatMessagePromptTemplate
+...:
+...: prompt = "May the {subject} be with you"
+...:
+...: chat_message_prompt = ChatMessagePromptTemplate.from_template(
+...:     role="Jedi", template=prompt
+...: )
+...: chat_message_prompt.format(subject="force")
+Out: ChatMessage(content='May the force be with you', role='Jedi')
+
+In : chat_message_prompt
+Out: ChatMessagePromptTemplate(prompt=PromptTemplate(input_variables=['subject'], template='May the {subject} be with you'), role='Jedi')
+```
+
+### 在LCEL里使用PromptTemplate
+
+因为 `PromptTemplate` 和 `ChatPromptTemplate` 已经实现了Runnable接口，所以在LCEL里可以直接使用:
+
+```
+In : from langchain_core.prompts import PromptTemplate
+
+In : prompt_template = PromptTemplate.from_template(
+...: "Tell me a {adjective} joke about {content}."
+...: )
+...:
+...: prompt_template.invoke({"adjective": "funny", "content": "chickens"})
+Out: StringPromptValue(text='Tell me a funny joke about chickens.')
+
+In : from langchain.chat_models import ChatOpenAI
+...: from langchain_core.prompts import ChatPromptTemplate
+...: from langchain_core.output_parsers import StrOutputParser
+...:
+...: model = ChatOpenAI()
+...: prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+...: output_parser = StrOutputParser()
+...: chain = prompt | model | output_parser
+...:
+...: chain.invoke({"foo": "bears"})
+Out: "Why don't bears like fast food?\n\nBecause they can't bear the taste!"
+```
+
+### Jinja2风格
+
+其实在一开始就提到默认它使用了f-string风格，大家市面上见到的基本都是这个风格，不过这个风格的最大问题是它单纯的是一个字符串拼接的模版风格，没有更多的表现形式。所以langchain也支持其他风格，例如这部分我们说的jinja2这个模版风格。jinja2是Python语言里知名的Web框架Flask内置的模版风格。我们看一下风格和怎么用:
+
+```
+In : !pip install jinja2  # 使用之前要先安装它
+In : jinja_prompt = PromptTemplate.from_template(
+...:     "Tell me a {{adj}} jokes about {% if content %}{{content}}{% else %}yourself{% endif %}",
+...:     template_format="jinja2"
+...: )
+...: jinja_prompt.format(adj="funny")
+Out: 'Tell me a funny jokes about yourself'
+
+In : jinja_prompt.format(adj="funny", content="bear")
+Out: 'Tell me a funny jokes about bear'
+```
+
+可以看到它写起来就比较复杂了。jinja2使用双大括号包裹变量，然后使用大括号加百分号作为一个block区块，里面可以使用判断等更复杂的语法去表达。比如这个例子，他会判断是否传入content，如果不传入就是用yourself，否则就用传入的content作为这部分的参数。这样表现力就很强了。
+
+这个是更进阶的使用方法，jinja2的性能也非常好，所以如果你的提示语很复杂，我建议一定要尝试一下它，去官方系统的学习它的语法，这可以让逻辑的维护性很好。

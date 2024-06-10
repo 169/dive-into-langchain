@@ -1,0 +1,150 @@
+Langchain在去年新增了一种新语法，叫做LangChain Expression Language (LCEL) 翻译过来叫做langchain表达式语言，我将分成三节从基础用法讲起，然后介绍一些高阶用法，最后一节介绍实现它的Python技术细节。让你可以看懂并理解它的用法，当你明白了它是如何实现的，那么未来就可以举一反三应对它的任何变化
+
+首先我们先了解一下这种组合链的声明式方式:
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+model = ChatOpenAI()
+prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+output_parser = StrOutputParser()
+chain = prompt | model | output_parser
+
+chain.invoke({"foo": "bears"})
+>>> AIMessage(content="Why don't bears ever wear shoes?\n\nBecause they have bear feet!", additional_kwargs={}, example=False)
+```
+
+这个最基本的用法，可以看到，在这个用法里使用 `|` 将它们链接在一起，然后使用 `chain.invoke` 传入模版里占位的变量作为参数调用它就可以请求LLM获取结果。
+
+### "|"运算符
+
+这个 | 也不是什么黑魔法，在程序员眼里他有很多种解读，官方文档也提过，这个`|` 符号类似于 unix 管道运算符，它将不同的组件链接在一起，将一个组件的输出作为输入提供给下一个组件。但是我觉得这个说法有点偏颇，我详细分享一下，我们先看linux管道的语法:
+
+```
+[command1] | [command2] | [command3] | ...
+```
+
+它的作用是“获取左侧的对象并将其作为右侧对象的输入”。所以 command2 会接收并处理 command1 的执行结果，而 command3 会再处理 command2 的执行结果的】，以此类推。下面是几个例子:
+
+```
+cat sample2.txt | head -7 | tail -5
+cat result.txt | grep "Rajat Dua" | tee file2.txt | wc -l
+find . -name "*.c" -print0 | xargs -0 rm -rf
+```
+在Linux管道的用法下，可以串行多个系统命令，再配合各个命令的参数可以说是Shell编程里的核心。
+
+而|在Python世界主要有2种竖线运算符，第一个是按位或运算符:
+
+```
+# Bitwise OR operator
+In []: 4 | 7
+Out[]: 7
+```
+
+第二个是字典合并操作符:
+
+```
+# Union Operator(PEP # 584)
+In []: {'spam': 1} | {'eggs': 2}
+Out[]: {'spam': 1, 'eggs': 2}
+```
+
+Langchain用的叫做字典合并操作符，这么用算是Python世界里比较独树一帜的代码实现方法。回到上面的例子:
+
+```
+In []: chain = prompt | model | output_parser
+
+In []: chain.first
+Out[]: ChatPromptTemplate(input_variables=['foo'], messages=[HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=['foo'], template='tell me a joke about {foo}'))])
+
+In []: chain.middle
+Out[]: [ChatOpenAI(client=<openai.resources.chat.completions.Completions object at 0x128c8f4d0>, async_client=<openai.resources.chat.completions.AsyncCompletions object at 0x1292add90>, openai_api_key='<API-KEY>', openai_proxy='')]
+
+In []: chain.last
+Out[]: StrOutputParser()
+```
+
+首先这肯定不是位运算，也不是说prompt会作为model的输入或者参数， 在这里你可以理解这个运算符是用于合并对象的，把这些信息都存了起来备用。在最后一节技术分析时我会再具体展开，在这里大家能理解它的执行结果就是变量chain，包含了提示模版，大语言模型，输出解析器等相关信息就可以了。但是要注意，这个合并的顺序是固定的，也就是按照他设计的步骤的顺序才可以，例如把model和prompt互换是不行的。
+
+### 核心组件
+
+在开始之前，先列出来Langchain里的核心关键组件并简单说一下它的作用。
+
+PromptTemplate。Prompt是用户提供的一组指令或输入，PromptTemplate就是用模版的方式管理Prompt，用一种类似Python字符串格式化的方式处理。
+LLM。给各种大语言模型提供一个统一的接口。
+ChatModel。它使用聊天消息作为输入并返回聊天消息作为输出。 LLM 和Chat Model 的本质区别在于输入输出。 **LLM 的输入输出都是字符串，而Chat Model 的输入输出都是Message 实例**。
+OutputParser。获取 LLM 的输出并将其转换为更合适的格式。我比较常用的是把返回的字符串直接转成json。
+Retriever。检索器是一个接口，它根据非结构化查询返回文档。
+
+再看一下本篇一开始的例子
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+model = ChatOpenAI()
+prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+output_parser = StrOutputParser()
+chain = prompt | model | output_parser
+
+chain.invoke({"foo": "bears"})
+>>> AIMessage(content="Why don't bears ever wear shoes?\n\nBecause they have bear feet!", additional_kwargs={}, example=False)
+```
+
+在这个例子里，ChatPromptTemplate是提示模版，StrOutputParser是输出解析器，ChatOpenAI是一个ChatModel。
+
+代码能这么写，主要是由于接下来说的Runnable类。
+### Runnable 接口
+
+LCEL语法中最核心和重要的一个类是Runnable。他是很多核心组件的基类，例如前面提到的那些核心组件，都是这样的。所以使用这些类生成的对象就可以使用竖线把它们串起来。
+
+我们通过这个类的代码中的一部分注释了解一下它的主要方法:
+
+```python
+class Runnable(Generic[Input, Output], ABC):
+    """A unit of work that can be invoked, batched, streamed, transformed and composed.
+
+     Key Methods     ===========
+    - **invoke/ainvoke**: Transforms a single input into an output.
+    - **batch/abatch**: Efficiently transforms multiple inputs into outputs.
+    - **stream/astream**: Streams output from a single input as it's produced.
+    - **astream_log**: Streams output and selected intermediate results from an input.
+```
+
+key methods就是核心方法。其中:
+
+invoke()：就是传递输入并获取输出。
+batch()：传递多个输入以获得多个输出，并行化会为您处理（比调用 invoke 多次更快）。
+stream()：用流的方式获取输出，他不是直接返回结果，而是过程中不断地获取输出。
+
+大家注意，这几个调用、批处理和流方法都有异步的版本: ainvoke() / .abatch() / .astream。在人工智能的领域里基本上异步方法的名字风格就是方法名字前加一个a，当然在英语语法上看起来很怪，因为Python世界里一般的用法是前面加 `async_`。
+
+所以这些核心组件已经继承这些方法，这也就是为什么一开始的例子调用了invoke方法。
+
+另外，这里只是他的部分常用的方法，还有一些未列出来的。下一节我会涉及到一些。
+
+注意: 也不是所有核心组件都继承了Runnable，例如Agent、Memory, DocumentLoaders,TextSplitter, VectorStore。一个理由是不需要那没用所以没必要，另外一个理由是实现复杂度很高，或者使用角度不一样，目前还不支持。
+
+### 对比
+
+接着我们用几个例子对比一下传统的 LangChain 语法和LCEL的区别来体验下它的强大.这个是仿照官方对比的效果，左边是过去的用法，右边是使用lcel后的效果。
+
+
+### LECL的优点
+
+接着我分析一下LCEL的优点
+
+1. 简化了链条的组成。LCEL用管道的方式会极大的简化了链条的组成，一方面能减少代码量，阅读起来更容易。
+2. 开箱即用。因为它统一了接口，所以每个 LCEL 对象都遵循 Runnable 接口，包含一组标准化的调用方法（invoke、batch、stream、ainvoke 等）。
+3. 统一接口。每个 LCEL 对象都遵循 Runnable 接口，所以继承了对批处理、异步和流式 API 的支持，这样消除了优化语言模型调用的复杂性，提高了开发效率。
+4. 提高扩展能力。Langchain其实最常用的就是做POC，也就是快速做出一个原型做概念验证，在过去写复杂应用和扩展功能都比较有限，我觉得langchain团队做LCEL其中一个重要理由就是提高上限，因为LCEL的灵活定制性高。
+5. 自定义链。这个语法简化了创建自定义链的过程。
+###  LECL的缺点
+
+在社区里并不完全是接受和赞同，也有很多开发者不喜欢它。不喜欢它的理由我感觉主要有一下几种:
+
+1. 难懂。Langchian本身是一个抽象程度很高的库，它就类似于Web框架里的Django，很复杂。而LECL是一个在这么已经很抽象的库之上的另一个抽象，其语法令人困惑，很难懂也难以调试。
+2. 这个实现方法并不Pythonic。当然这个有点智者见智仁者见仁，我个人觉得还好。

@@ -1,0 +1,286 @@
+前面一节我们已经了解了LCEL的基础用法，这一篇就来介绍LCEL的一些高级用法。
+
+### 合并操作符还可以怎么用?
+
+在上一节里面多次出现的例子我们再看一次:
+
+```
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+model = ChatOpenAI()
+prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+output_parser = StrOutputParser()
+chain = prompt | model | output_parser
+
+chain.invoke({"foo": "bears"})
+```
+
+这个chain是模版，模型和解析器的组合。
+
+不过如我之前提的，每个组件都继承了Runnable，所以这些组件以及组件的组合也都有invoke等方法。看几个例子:
+
+```
+# 只格式化模版字符串
+In []: prompt.invoke({"foo": "bears"})
+Out[]: ChatPromptValue(messages=[HumanMessage(content='tell me a joke about bears')])
+
+# 调用LLM，但是返回了AIMessage，没有通过StrOutputParser解析成字符串
+In []: (prompt | model).invoke({"foo": "bears"})
+Out[]: AIMessage(content="Why don't bears like fast food?\nBecause they can't catch it!", response_metadata={'token_usage': {'completion_tokens': 15, 'prompt_tokens': 13, 'total_tokens': 28}, 'model_name': 'gpt-3.5-turbo', 'system_fingerprint': 'fp_c2295e73ad', 'finish_reason': 'stop', 'logprobs': None})
+```
+
+### **RunnableLambda**
+
+刚才我们看到的合并都是已有的组件，但是还可以串联一些自定义的Tool或者函数等。
+
+```
+In []: from langchain_experimental.utilities import PythonREPL
+
+In []: template = """Write some python code to solve the user's problem.
+  ...:
+  ...: Return only python code in Markdown format, e.g.:
+  ...:
+  ...: ```python
+  ...: ....
+  ...: ```"""
+  ...: prompt = ChatPromptTemplate.from_messages([("system", template), ("human", "{input}")])
+
+In []: def _sanitize_output(text: str):
+  ...:     _, after = text.split("```python")
+  ...:     return after.split("```")[0]
+  ...:
+
+In []: chain = prompt | model | StrOutputParser() | _sanitize_output | PythonREPL().run
+  ...:
+
+In []: chain.invoke({"input": "whats 2 plus 2"})
+Python REPL can execute arbitrary code. Use with caution.
+Out[]: '4\n'
+
+In []: chain.middle[-1]
+Out[]: RunnableLambda(_sanitize_output)
+
+In []: chain.last
+Out[]: RunnableLambda(run)
+
+# 因为: langchain_core.runnables.base.coerce_to_runnable
+```
+
+一眼看去是看不懂为什么能实现的，因为后面那俩函数看起来并没有invoke方法。事实上在使用合并操作符时，它已经自动包装了RunnableLambda，这是因为逻辑上使用了上面代码块注释最后一行的那个函数，咱们就不展开了。这里只是说RunnableLambda的用法。
+
+简单的理解它就是用于创建提供了Runnable接口的自定义函数的。在基本的用法里，函数的输入得是单个参数:
+
+```
+In []: from langchain_core.runnables import RunnableLambda
+  ...:
+  ...: def add_five(x):
+  ...:     return x + 5
+  ...:
+  ...: def multiply_by_two(x):
+  ...:     return x * 2
+  ...:
+
+In []: chain = RunnableLambda(add_five) | multiply_by_two
+
+In []: chain.invoke(5)
+Out[]: 20
+```
+
+在一个链条中，只有第一部分可能需要添加RunnableLambda，其他的可加可不加。在这个例子可以看到invoke的逻辑是先加5，然后对值再乘以2.
+
+如果想要实现接受多个参数的函数，需要做一些特别的编码，在开始展示例子之前，我们得学习一下Python语言里的itemgetter函数:
+
+```
+# Functional Programming's Currying
+In []: from operator import itemgetter
+
+In []: itemgetter(1)('ABCDEFG')
+Out[]: 'B'
+
+In []: itemgetter(1, 3, 5)('ABCDEFG')
+Out[]: ('B', 'D', 'F')
+
+In []: soldier = dict(rank='captain', name='dotterbart')
+
+In []: itemgetter('rank')(soldier)
+Out[]: 'captain'
+```
+
+如果你理解函数编程里的柯里化就比较好理解它了，它做了函数的转换，比较常用在部分求值上。接着我们看几个用法，有点难懂，我挨个解析:
+
+```
+def length_function(text):
+    return len(text)
+
+def _multiple_length_function(text1, text2):
+    return len(text1) * len(text2)
+
+def multiple_length_function(_dict):
+    return _multiple_length_function(_dict["text1"], _dict["text2"])
+
+prompt = ChatPromptTemplate.from_template("what is {a} + {b}")
+model = ChatOpenAI()
+
+chain = (
+    {
+        "a": itemgetter("foo") | RunnableLambda(length_function),
+        "b": {"text1": itemgetter("foo"), "text2": itemgetter("bar")}
+        | RunnableLambda(multiple_length_function),
+    }
+    | prompt
+    | model
+)
+
+In []: chain.invoke({"foo": "bar", "bar": "gah"})
+  ...:
+Out[]: AIMessage(content='3 + 9 = 12', response_metadata={'token_usage': {'completion_tokens': 7, 'prompt_tokens': 14, 'total_tokens': 21}, 'model_name': 'gpt-3.5-turbo', 'system_fingerprint': 'fp_c2295e73ad', 'finish_reason': 'stop', 'logprobs': None})
+```
+
+在这个例子中，有另外一个比较高阶的用法，就是链条第一个不是prompt，而是一个字典。不过完全别担心LCEL的支持的问题，因为这个竖线本来全称就是字典合并操作符，所以它原生支持字典作为组合的一部分。字典在前面，是接下来prompt里变量a,b的求值逻辑，所以你能看到有这种比较突兀的字典是，别害怕，字典里面的键肯定是后面某一部分里面的变量。
+
+这个字典里有2个键，a和b，它描述了这2个值要怎么计算得来。所以a的值是未来在invoke里传递的字典中foo键的值，然后把这个值作为参数传给后面计算长度的函数。b这段前面还是个字典，但是不重要，它只是为了给后面 `multiple_length_function` 提供源数据的，b的值是计算了invoke参数中foo和bar2个键的值的长度相乘而来。所以在prompt里拼的就是计算3加9等于多少，如果你没理解可以再慢慢分析一下这部分。
+
+通过itemgetter和RunnableLambda可以极大的扩展LCEL的能力。
+
+### RunnablePassthrough
+
+`RunnablePassthrough()` 是一个占位符，表示：“先设置一个或者多个变量，暂时没有变量的值，先占用地方，在之后的流程里面，当有了它时，就将它添到原来占用的地方”。我们看个例子:
+
+```
+In []: prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+  ...: from langchain_core.runnables import RunnablePassthrough
+  ...: runnable = (
+  ...:     {"foo": RunnablePassthrough()} | prompt | model | StrOutputParser()
+  ...: )
+  ...: runnable.invoke("bears")
+Out[]: 'Why did the bear bring a flashlight to the party? \n\nBecause he heard it was going to be a "beary" good time!'
+```
+
+这个其实和一开始咱们看的例子是一样的效果，原来变量放在字典里传给invoke方法，现在由于先把foo变量设置成RunnablePassthrough，所以最终直接传递它。我们可以再变化一下传递2个RunnablePassthrough：
+
+```
+In []: prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}, in {language} language")
+  ...: runnable = (
+  ...:     {"foo": RunnablePassthrough(), "language": RunnablePassthrough()} | prompt | model | StrOutputParser()
+  ...:
+  ...: )
+  ...: runnable.invoke(("bears", "chinese"))
+Out[]: '为什么熊不喜欢吃中国菜？\n因为他们怕被熊掌打！'
+```
+
+但是注意，不能混用，参数要不然在一开始都指派，要不然就得在invoke时传入字典格式。就比如上面例子你不能在前面只传foo，而在invoke里才传递language键。因为这么写按照langchain的实现，invoke的参数input已经绑定在预设的foo上了，你可以尝试一下。当然在这里还可以用itemgetter来实现，前面提过就不展开了。
+
+### Runnable的定制
+
+继承了Runnable的组件除了支持合并操作符，其实还有一个优势，就是在运行时可以个性化配置和添加状态，主要要看三个方法 `assign`、`bind` 和 `with_config`，我们看个例子:
+
+```
+In []: prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+  ...: chain = RunnablePassthrough.assign(input=lambda x: x['foo'] + 'ars') | prompt.with_config(configurable={"l
+  ...: lm_temperature": 0.9}) | model.bind(stop="\n") | output_parser
+  ...: chain.invoke({"foo": "be"})
+Out[]: 'Why did the bee get married? Because he found his honey!'
+```
+
+这几个方法在不同的组件中的参数项可能是不同的，一定要注意，比如model里用bind绑定了停止词，帮在其他的组件上是不可以的；assign表示对于参数的值或者说状态的动态更新，例如这里就是把最终传递的参数的值再加几个字母，在这个例子里就拼成了bears，而绑在其他的组件上也不行，因为只有在前面它才可以是字典格式的。而with_config改配置是一个较为通用的配置，绑在谁上面都可以，实现的效果是一样的，甚至可以再invoke前或者invoke里面传递:
+
+```
+In []: prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+  ...: chain = prompt | model | output_parser
+  ...: chain.with_config(configurable={"llm_temperature": 0.9}).invoke({"foo": "bears"})
+Out[]: "Why don't bears like fast food? Because they can't catch it!"
+
+In []: chain.invoke({"foo": "bears"}, config=dict(configurable={"llm_temperature": 0.9}))
+Out[]: 'Why did the bear break up with his girlfriend?\nBecause she was unbearable!'
+```
+
+### RunnableParallel
+
+在前面的内容中我们已经知道Runnable类里面有batch和abatch支持批处理:
+
+```
+In []: prompt = ChatPromptTemplate.from_template(
+  ...:     "Tell me a short joke about {topic}"
+  ...: )
+  ...: chain = prompt | model | output_parser
+  ...: chain.batch(["ice cream", "spaghetti", "dumplings"])
+Out[]:
+['Why did the ice cream truck break down?\n\nIt had too many "scoops" of ice cream!',
+ 'Why did the spaghetti go to the party? Because it heard it was going to be a pasta-tively great time!',
+ 'Why did the dumpling go to the party? Because it wanted to get steamed!']
+```
+
+类似上面的例子中，使用batch可以并行的返回三个话题对应的笑话。但是这个方式里，操作是相同的，只是话题的变量值不同。那么有没有更高层次的并行方案呢。
+
+也就是这小节要提的RunnableParallel，RunnableParallel对象允许我们定义多个值和操作，并并行运行它们. 官网的例子写的非常好，我们直接看官方，就不拷贝到本地了。我们一起来看一下。
+
+https://python.langchain.com/docs/expression_language/interface/#parallelism
+
+这个例子展示了2个chain，他们是不同的操作，一个返回笑话，一个返回短诗。而下面是一个使用RunnableParallel实现的合并操作。
+
+为了能够让你感受效率的区别，会分别运行他们。可以看到合并之后的运行速度要高于分别执行的速度，所以这就是并行的优势。
+
+https://python.langchain.com/docs/expression_language/interface/#parallelism-on-batches
+
+下面还展示了并行执行批处理的效果。也就是每个操作都是批处理，同样地，可以看到合并操作的耗时其实就是分别批处理耗时最长的那个时长左右。
+
+### 多链
+
+前面的例子都是单个chain，一个链说白了就是写好prompt，请求model获取输出，然后把模型输出解析成想要的格式或者截取其中某一部分数据。
+
+接着我们得了解另外一个重要的场景，多链。也就说可能存在多的prompts，请求多次model，按照需要分别解析。
+
+LCEL也支持多链:
+
+```
+In  []: prompt1 = ChatPromptTemplate.from_template("which city is the capital of {country}?")
+   ...: prompt2 = ChatPromptTemplate.from_template(
+   ...:     "Translate {city} in {language}"
+   ...: )
+   ...:
+   ...: chain1 = prompt1 | model | StrOutputParser()
+   ...:
+   ...: chain2 = (
+   ...:     {"city": chain1, "language": itemgetter("language")}
+   ...:     | prompt2
+   ...:     | model
+   ...:     | StrOutputParser()
+   ...: )
+   ...:
+   ...: chain2.invoke({"country": "France", "language": "chinese"})
+Out []: '法国的首都是巴黎。'
+```
+
+在这里例子里，有2个链，chain1是先问法国的首都是那个城市，chain2的city变量来自chain1，这个链里面基于前面链获取的英文城市名字，然后再对LLM提问，让它回复成中文。
+
+### Retriever配合
+
+一个常见的工作场景就是RAG，所以需要配合Retriever使用，我们通过这个例子了解下:
+
+```
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+
+vectorstore = FAISS.from_texts(
+    ["harrison worked at kensho"], embedding=OpenAIEmbeddings()
+)
+retriever = vectorstore.as_retriever()
+
+template = """Answer the question based only on the following context:
+{context}
+
+Question: {question}
+"""
+prompt = ChatPromptTemplate.from_template(template)
+chain = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | prompt
+    | model
+    | StrOutputParser()
+)
+chain.invoke("where did harrison work?")
+```
+
+在LCEL里，检索器是作为上下文传入的，这个代码的意思是在向量数据库存储了额外的相关内容，里面包含了harrison的工作地点，所以在之后这部分就会当做提示的一部分请求模型。这也是一种多链的形式。

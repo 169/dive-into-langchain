@@ -1,0 +1,278 @@
+LangChain 表达式语言（LCEL）是将一些有趣的 Python 概念抽象为一种格式，例如使用类型与Linux管道的效果，这在Python世界并不常见。本小节我给大家揭秘一下Python语言对应的实现细节
+
+### 怎么实现字典合并操作符
+
+在PEP 584里给对象添加了合并操作符。这样就可以对字典使用竖线了:
+
+```
+In : {'a': 1} | {'b': 2}
+Out: {'a': 1, 'b': 2}
+
+In : {1} | {2}
+Out: {1, 2}
+
+In : {'a': 1} | {'a': 2}
+Out: {'a': 2}  # Replace
+
+In : d = {'a': 1}
+
+In : d |= {'b': 2}  # In-Place
+
+In : d
+Out: {'a': 1, 'b': 2}
+```
+
+可以简单理解它用于合并字典里面的键值对。在实现上就是给对象添加了 `__or__` 、`__ror__` 和 `__ior__` 这3个方法，其中 `__or__` 就是管道用法，`__ror__` 是reverse的 `__or__` 也就是反向的管道，而 `__ior__`是直接在原对象上更新。
+
+再看几个例子:
+
+```
+In : {'a': 1}.__or__({'a': 2})  # <==> x|y
+Out: {'a': 2}
+
+In : {'a': 1}.__ror__({'a': 2}) # <==> y|x
+Out: {'a': 1}
+
+In : d = {'a': 1}
+
+In : d.__ior__({'a': 2})
+Out: {'a': 2}
+
+In : d
+Out: {'a': 2}
+```
+
+在使用上，不一定要在全部添加这三个方法，按需重置对应的方法就可以了。
+
+接着我们实现了一个非常基础的版本:
+
+```
+class Runnable:
+    def __init__(self, func):
+        self.func = func
+
+    def __or__(self, other):
+       def chained_func(*args, **kwargs):
+           return other(self.func(*args, **kwargs))
+	   return Runnable(chained_func)
+
+    def __call__(self, *args, **kwargs):
+        return self.func(*args, **kwargs)
+```
+
+这个类的实现中覆盖了默认的magic方法 `__or__`。另外 `__call__` 也是一个魔法方法，就是可以直接让实例可调用，也就是直接加个括号传递参数就可以执行。我用另外一个例子让大家理解这部分。
+
+```ipython
+In : class A:
+...:     def __init__(self, a):
+...:         self.a = a
+...:
+
+In : a = A(10)
+
+In : a()  # __call__ method is not defined
+---------------------------------------------------------------------------
+TypeError                                 Traceback (most recent call last)
+Cell In[8], line 1
+----> 1 a()
+
+TypeError: 'A' object is not callable
+
+In : class B:
+...:     def __init__(self, a):
+...:         self.a = a
+...:
+
+In : class B:
+...:     def __init__(self, a):
+...:         self.a = a
+...:     def __call__(self, c):
+...:         print(self.a + c)
+...:
+
+In : b = B(10)
+
+In : b(2)
+12
+```
+
+也就说，在默认不实现 `__call__` 方法时，实例是不能调用的，他说这个对象A是不callable的。如果实现了，就可以直接调用了。
+
+好了，现在我们回到刚才实现的基础版本，通过下面的例子调用让你感受下运算符的效果。
+
+```
+def add_ten(x):
+    return x + 10
+
+def divide_by_two(x):
+    return x / 2
+
+runnable_add_ten = Runnable(add_ten)
+runnable_divide_by_two = Runnable(divide_by_two)
+chain = runnable_add_ten | runnable_divide_by_two
+result = chain(8) # (8+10) / 2 = 9.0
+print(result)
+```
+
+这就是Runnable类实现的原理了。只不过在LCEL里是把这些核心组件先存起来，等需要调用时再组织它们。
+
+### 字典合并
+
+我们看例子:
+
+```
+In : from langchain.prompts import ChatPromptTemplate
+
+In : from langchain_core.runnables import RunnablePassthrough
+
+In : prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+
+In : runnable = {"foo": RunnablePassthrough()} | prompt
+
+In : runnable
+Out:
+{
+  foo: RunnablePassthrough()
+}
+| ChatPromptTemplate(input_variables=['foo'], messages=[HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=['foo'], template='tell me a joke about {foo}'))])
+
+In : runnable.invoke("pig")
+Out: ChatPromptValue(messages=[HumanMessage(content='tell me a joke about pig')])
+```
+
+在直觉上，给自定义的类重置`__or__`方法是容易的，但是上面例子前面是字典，不同类型是不可以合并的:
+
+```
+In : class Runnable:
+...:     def __init__(self, item):
+...:         self.item = item
+...:
+
+In : {'a': 1} | Runnable({'b': 2})
+---------------------------------------------------------------------------
+TypeError                                 Traceback (most recent call last)
+Cell In, line 1
+----> 1 {'a': 1} | Runnable({'b': 2})
+
+TypeError: unsupported operand type(s) for |: 'dict' and 'Runnable'
+```
+
+那么CLEL里的效果是怎么实现的呢？如果你看完上一个小节并积极思考过，你可能有个思路，接下来我们看看是不是有正确答案了:
+
+```
+In []: from langchain_core.runnables.base import indent_lines_after_first
+
+In []: class RunnableSequence:
+...:     def __init__(self, steps):
+...:         self.steps = steps
+...:     def __repr__(self):
+...:         return "\n| ".join(
+...:             repr(s) if i == 0 else indent_lines_after_first(repr(s), "| ")
+...:             for i, s in enumerate(self.steps)
+...:         )
+...:
+
+In []: class Runnable:
+...:     def __init__(self, item):
+...:         self.item = item
+...:     def __or__(self, other):
+...:         if not isinstance(other, Runnable):
+...:             other = Runnable(other)
+...:         return RunnableSequence([self, other])
+...:     def __ror__(self, other):
+...:         if not isinstance(other, Runnable):
+...:             other = Runnable(other)
+...:         return RunnableSequence([other, self])
+...:     def __repr__(self):
+...:         return repr(self.item)
+...:
+
+In []: Runnable({'a': 1}) | Runnable({'b': 2})
+Out[]:
+{'a': 1}
+| {'b': 2}
+
+In []: {'a': 1} | Runnable({'b': 2})
+Out[]:
+{'a': 1}
+| {'b': 2}
+```
+
+是的，是通过`__ror__`就实现前面字典后面Runnable的效果的。其中`__repr__`也是Python对象的一个magic方法，用于显示对象，我使用它是为了让返回的结果更好懂。另外有个函数是格式化的，我就直接用Langchain自己的了，大家不用太关注它的实现。
+### 调试
+
+使用LCEL后，调试起来没有原来的直观，我现在提供2个方案帮助大家更好的用好它。
+
+#### 图表
+
+是一个是使用内置的图表功能，就是你再写好表达式之后，你可以在invoke前确认是不是符合你的预期，或者在invoke后感觉执行的不对来帮助确认问题原因。我们还是看一开始提的例子:
+
+```
+In : from langchain.chat_models import ChatOpenAI
+...: from langchain.prompts import ChatPromptTemplate
+...: from langchain_core.output_parsers import StrOutputParser
+...:
+...: model = ChatOpenAI()
+...: prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+...: output_parser = StrOutputParser()
+...: chain = prompt | model | output_parser
+
+In : chain.get_graph().print_ascii()
+     +-------------+
+     | PromptInput |
+     +-------------+
+            *
+            *
+            *
+  +--------------------+
+  | ChatPromptTemplate |
+  +--------------------+
+            *
+            *
+            *
+      +------------+
+      | ChatOpenAI |
+      +------------+
+            *
+            *
+            *
+   +-----------------+
+   | StrOutputParser |
+   +-----------------+
+            *
+            *
+            *
++-----------------------+
+| StrOutputParserOutput |
++-----------------------+
+```
+
+通过 `get_graph` 方法可以获取这个流程图，然后使用 `print_ascii` 方法就可以了解是怎么样的流程了。除此之外还支持导出png图片，但是我觉得在终端打印会更省事一点。
+
+#### 通过LangSmith
+
+如果你看过官方文档，它就明确提出设计初衷之一就是无缝支持LangSmith追踪。如果链条变得越来越复杂，了解每一步到底发生了什么变得越来越重要。而借助 LCEL，所有步骤都会自动记录到 LangSmith，以实现最大程度的可观察性和可调试性。
+
+我们看一个例子就可以知道目前LangSmith是最好的方案。
+
+我创建了一个叫做 lcel-test的项目，然后按照文档的说明指定环境变量:
+
+```
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
+LANGCHAIN_API_KEY="<your-api-key>"
+LANGCHAIN_PROJECT="lcel-test"
+```
+
+接着再调用就会把trace记录下来:
+
+
+LangSmith未来会是一个付费的产品，不过目前给个人用户每个月500个traces的额度，其实还是够的。这个产品目前应该还是邀请制，你可以考虑来给Langchain贡献代码等方法获取邀请
+### 后记
+
+如果你还有其他不理解的LCEL的用法欢迎留言给我，我可以再来揭秘。
+
+### 延伸阅读
+
+1. https://peps.python.org/pep-0584/
+2. https://smith.langchain.com/

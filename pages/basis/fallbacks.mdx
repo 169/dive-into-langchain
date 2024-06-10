@@ -1,0 +1,126 @@
+使用了大语言模型的应用或者产品对于稳定性都要求很高，但是在执行的链路上存在许多可能的故障点，例如LLM API 的问题、模型输出质量差、其他集成问题等。Langchain有一个主推的功能就是Fallbacks，也就是回退。
+
+这一章我们通过多个例子来了解回退是如何优雅地处理和隔离这些问题的。
+
+### API问题
+
+首先看最常见的API错误，我们就拿OpenAI来说，如果你一直在用它的API服务，你肯定经历过间歇性中断或者速率限制。如果它宕机了，你的服务就立刻不能用了，而如果你的APIKEY有速度限制会造成报错或者得sleep一段时间再重试，但是给用户的感受是请求变的非常慢。
+
+ 那怎么办呢？我们看一下官方给的例子:
+
+```
+from langchain_community.chat_models import ChatAnthropic
+from langchain_openai import ChatOpenAI
+
+# Setting up the primary and fallback LLMs
+openai_llm = ChatOpenAI(max_retries=0)
+anthropic_llm = ChatAnthropic()
+
+# Configuring the fallback mechanism
+llm = openai_llm.with_fallbacks([anthropic_llm])
+
+# Attempting to invoke the primary LLM, with a fallback to the secondary LLM in case of failure
+try:
+    print(llm.invoke("Why did the chicken cross the road?"))
+except RateLimitError:
+    print("Hit error")
+```
+
+这个例子里有2个LLM，主模型是OpenAI，回退模型是Anthropic，整体逻辑的核心就是 `with_fallbacks` 方法。当主 LLM 发生错误时，将在链中调用该“后备”。该功能的行为相当于一个 if 语句。如果调用主 LLM 时发生错误，请尝试调用“后备”LLM。这个例子是非常易于理解的，但我们知道模型输出的差别是很大的，所以事实上不会有产品真的这么用。这么使用的话只可能是自己部署的模型，在多个API服务器之间做个动态故障转移，那比较真实的场景是什么呢？
+### 回退其他APIKEY
+
+如果你没有和官方购买更高速率的APIKEY，那么你请求的速率是有限制的，例如最普通情况一分钟只能请求三次，超了就抛RateLimitError，如果你用langchain的agentexecutor的话，他会默认自己在超时后sleep一段时间重试，但是这个整体执行时间就很慢了。
+
+之前我的实现方案是设置成不重试，然后自己捕捉错误类型，然后把不同的APIKEY实例成一个池，发现是速率问题就换其他的实例。当然还可以设计成在generate方法里通过算法选择，尽量避免触发速率限制。
+
+而用Langchain的方案会更简单，我给一个例子来帮助理解:
+
+```
+primary_llm = ChatOpenAI(max_retries=0, api_key="<API_KEY_1>")
+fallback_llm = ChatOpenAI(max_retries=0, api_key="<API_KEY_2>")
+llm = primary_llm.with_fallbacks([fallback_llm])
+
+try:
+    print(llm.invoke("Why did the chicken cross the road?"))
+except RateLimitError:
+    print("Hit error")
+```
+
+这个例子写的很简单，实例化了2个llm，也就是其中一个不行就换另外一个，当然实际上会涉及成一个池，使用某种算法从其中选择即可。例如轮询、最小连接数、权重等等角度。
+
+### 模型输出问题
+
+回退不是只可以用于解决错误，当然还可以用于优化或者说省钱。先看几个价格表:
+
+![[Screenshot 2024-05-19 at 10.11.36 PM.png]]
+
+![[Screenshot 2024-05-19 at 10.11.11 PM.png]]
+
+![[Screenshot 2024-05-19 at 10.10.31 PM.png]]
+
+结论是，GPT4是GPT3.5的6倍价格，GPT3.5 16K是GPT3.5的6倍价格，GPT4 16K是GPT4的2倍价格。如果可以使用更便宜的模型或者更小的模型尺寸，那么价格就会更便宜。
+
+那我们设想2个场景:
+
+1. 对于某些特定输出，GPT3.5和GPT4的效果差不多，甚至更好，你可以选择GPT3.5。
+2. 在聊天模式下，聊着聊着上下文可能会超出模型token限制，但是如果一开始就选大的模型尺寸总体价格高了很多，大部分场景到不了限制就浪费了，那是否可以自适应选择模型？
+
+好了，基于这2个场景，看看用回退怎么实现。官方给了一个时间格式解析的例子:
+
+```
+from langchain.output_parsers import DatetimeOutputParser
+
+prompt = ChatPromptTemplate.from_template(
+    "what time was {event} (in %Y-%m-%dT%H:%M:%S.%fZ format - only return this value)"
+)
+openai_35 = ChatOpenAI() | DatetimeOutputParser()
+openai_4 = ChatOpenAI(model="gpt-4") | DatetimeOutputParser()
+fallback_4 = prompt | openai_35.with_fallbacks([openai_4])
+try:
+    print(fallback_4.invoke({"event": "the superbowl in 1994"}))
+except Exception as e:
+    print(f"Error: {e}")
+```
+
+也就是如果在GPT3.5时解析不了，就会回退使用GPT4。不过一定要注意，这种解析异常的概率要比较低，否则就浪费了2次API请求，还不如直接用GPT4。
+### 指定要处理的错误类型
+
+在默认情况下大部分异常都会执行回退，这是因为会判断这个异常是否继承了Exception类。但是你也可以指定仅处理某个或者某些异常:
+
+```
+llm = primary_llm.with_fallbacks(
+[fallback_llm], exceptions_to_handle=(KeyboardInterrupt,)
+)
+```
+
+例如这个例子，只会处理Ctrl-C中断这一种异常，其他的异常会正常抛错而不是回退的。
+
+### 基于LCEL的回退
+
+回退在LCEL里可以支持更高级别的粒度和控制。我们看个例子:
+
+```
+from langchain_core.output_parsers import StrOutputParser
+from langchain.prompts import PromptTemplate, ChatPromptTemplate
+
+from langchain_openai import OpenAI, ChatOpenAI
+
+chat_model = ChatOpenAI()
+llm = OpenAI()
+chat_prompt = ChatPromptTemplate.from_messages([
+    ("ai", "tell me a joke about {foo}"),
+])
+prompt = ChatPromptTemplate.from_template("tell me a joke about {foo}")
+bad_chain = chat_prompt | chat_model | StrOutputParser()
+good_chain = prompt | llm
+
+chain = bad_chain.with_fallbacks([good_chain])
+
+chain.invoke({"foo": "bears"})
+```
+
+大家注意，回退是基于链条也就是chain的，所以不同chain内容的细节都可以控制。上例虽然叫bad和good，其实都正常，只是模拟个效果，也就是我可以一方面用Chat模型，另外一方面直接用API，两者都是独立控制的。
+
+### 延伸阅读
+
+1. https://context.ai/compare/gpt-4/gpt-4-32k
