@@ -1,6 +1,6 @@
 在使用大语言模型的时候，无论是用Langchain还是直接用对应模型的API，都会遇到大语言模型的输出的解析问题。就拿OpenAI模型来说，看如下几个例子:
 
-```
+```python
 In : from langchain_openai import OpenAI
 
 In : llm = OpenAI()
@@ -15,24 +15,26 @@ In : llm.invoke("give me a json data, keys: a, b, value use int")
 Out: '\n\n{\n  "a": 5,\n  "b": 10\n}'
 ```
 
-这里有三个例子，相应的内容不能直接使用。第一个例子我只需要结果2这个值，第二个例子我希望直接转换成一个Python的列表，第三个例子我希望转化成一个JSON结构，也就是字典。
+这里有三个例子，相应的内容不能直接使用。第一个例子我只需要结果*2*这个值，第二个例子我希望直接转换成一个Python的列表，第三个例子我希望转化成一个JSON结构，也就是字典。
 
 如果直接用OpenAI的SDK，返回还会包在一个特定的实例里，虽然整体内容也是字符串。如果你真的要用到返回值，通常需要进行结构化、格式化或解析。我总结解析有如下三类:
 
 1. 将非结构化文本转换为结构化数据。例如，将文本解析为 JSON 或 Python 对象
 2. 截取部分。只解析其中部分内容
 3. 自定义处理。在提示中注入指令，告诉语言模型如何格式化其响应。解析器可以提供返回提示文本的 `get_format_instructions()` 方法
+
 ### StrOutputParser
 
 接下来看一下最常见的StrOutputParser，其实它的解析什么也没有做, 就是把响应的字符串返回:
 
+```python
+In : from langchain_core.output_parsers import StrOutputParser
+...:
+...: StrOutputParser().parse("a string")
+Out: 'a string'
 ```
-from langchain_core.output_parsers import StrOutputParser
 
-StrOutputParser().parse("a string")
-```
-
-了解解析器的最简单办法就是用它的`parse` 方法。这个组件是独立的，不想Langchain里面其他的组件，需要使用langchain时用，解析器是可以独立使用的。
+了解解析器的最简单办法就是用它的`parse`方法。这个组件是独立的，不想Langchain里面其他的组件，需要使用langchain时用，解析器是可以独立使用的。
 
 ### OutputParser对象
 
@@ -40,7 +42,7 @@ StrOutputParser().parse("a string")
 
 我找了个典型的按逗号分隔成列表的解析器 `CommaSeparatedListOutputParser`:
 
-```
+```python
 class CommaSeparatedListOutputParser(ListOutputParser):
     """Parse the output of an LLM call to a comma-separated list."""
 
@@ -78,7 +80,7 @@ class CommaSeparatedListOutputParser(ListOutputParser):
 
 Pydantic是用于现在主流的数据验证的库，它设计了自己的模型定义方法，我们就借用它实现确保输出符合特定架构，从而更容易在应用程序中解析和使用。
 
-```
+```python
 In : from langchain.output_parsers import PydanticOutputParser
 ...: from langchain_core.pydantic_v1 import BaseModel, Field
 ...: class Joke(BaseModel):
@@ -99,11 +101,12 @@ Out: 'The output should be formatted as a JSON instance that conforms to the JSO
 ```
 
 Pydantic里的BaseModel类似于Python标准库的dataclass模块里的实现，但额外具有实现的强制类型检查。在这里就是定义返回的数据的格式有2个键，分别是setup和punchline。模版的用法稍微有点不普通，需要在提示中对指令的格式做了具体的要求，其实也是使用解析器自带的。这样可以更好的约束。`partial_variables`的意思是先传入部分已知的变量，所以最终invoke时只需要传入query即可。最终可以看到解析器返回了一个Joke实例，并把对应的值写到对应的键里。
+
 ### JsonOutputParser
 
 在我的实际应用中有很大程度情况下返回数据都需要是JSON类型，看看要怎么写呢？其实和前面的例子的代码很像，就是换个解析器:
 
-```
+```python
 In : from langchain_core.output_parsers import JsonOutputParser
 ...: class Joke(BaseModel):
 ...:     setup: str = Field(description="question to set up a joke")
@@ -123,11 +126,12 @@ Out:
 ```
 
 可以看到唯一的区别就是返回的数据的格式。
+
 ### ResponseSchema+StructuredOutputParser
 
 想要返回多个字段也可以使用此输出解析器。虽然 Pydantic/JSON 解析器更强大，但这对于功能较弱的模型这很有用。
 
-```
+```python
 In : from langchain_openai import OpenAI
 ...: from langchain.output_parsers import ResponseSchema, StructuredOutputParser
 ...: from langchain.prompts import PromptTemplate
@@ -161,7 +165,7 @@ Out: 'The output should be a markdown code snippet formatted in the following sc
 
 我们拿一开始说的一加一等于2这个例子来说:
 
-```
+```python
 In : llm = OpenAI()
 
 In : llm.invoke("tell me 1 + 1 equal?")
@@ -178,13 +182,14 @@ Out: 2
 ```
 
 我们简单定义了这个叫做 `get_result` 的函数，在合并操作符的实现里会自动包装成一个RunnableLambda。然后放在chain里就会解析出结果
+
 #### 自定义标准解析器
 
 自定义解析器除了继承还需要至少实现parse方法。回到一开始提的三个例子中的另外2个，咱们看看怎么实现它。
 
 首先是第二个需求。其实如果你对langchain熟悉，其实里面已经实现这个格式的解析:
 
-```
+```python
 In : from langchain_core.output_parsers import NumberedListOutputParser
 
 In : resp = '\n\n1. Lion\n2. Elephant\n3. Giraffe'
@@ -197,7 +202,7 @@ Out: ['Lion', 'Elephant', 'Giraffe']
 
 然后是第三个需求，把数据解析成一个json。先看我的完成版本:
 
-```
+```python
 class MyJsonOutputParser(BaseTransformOutputParser[str]):
 
     @classmethod
@@ -219,7 +224,7 @@ class MyJsonOutputParser(BaseTransformOutputParser[str]):
 
 注意我并没有实现`get_format_instructions`方法，因为现在的prompt里面已经对schema做了约束，OpenAI已经理解了。所以在invoke时也就不需要再组织语言额外描述，我们看一下调用:
 
-```
+```python
 In : MyJsonOutputParser().parse('\n\n{\n  "a": 5,\n  "b": 10\n}')
 Out: {'a': 5, 'b': 10}
 
@@ -233,9 +238,16 @@ Out: {'a': 1, 'b': 2}
 ```
 
 可以看到通过正则能把返回结果解析成Python的字典对象了。
-### ## Function calling
+
+### Function calling
 
 如果你是用的模型支持Function calling，可以不使用解析器，而是直接规定他的输出格式，这是另外一个解决方案。在其他篇会专门展开。
+
+### 视频
+
+import { YouTubeEmbed } from '@next/third-parties/google'
+
+<YouTubeEmbed videoid="MdvFAVGWL4M"/>
 
 ### 延伸阅读
 

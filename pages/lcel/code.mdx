@@ -4,7 +4,7 @@ LangChain 表达式语言（LCEL）是将一些有趣的 Python 概念抽象为�
 
 在PEP 584里给对象添加了合并操作符。这样就可以对字典使用竖线了:
 
-```
+```python
 In : {'a': 1} | {'b': 2}
 Out: {'a': 1, 'b': 2}
 
@@ -26,7 +26,7 @@ Out: {'a': 1, 'b': 2}
 
 再看几个例子:
 
-```
+```python
 In : {'a': 1}.__or__({'a': 2})  # <==> x|y
 Out: {'a': 2}
 
@@ -46,7 +46,7 @@ Out: {'a': 2}
 
 接着我们实现了一个非常基础的版本:
 
-```
+```python
 class Runnable:
     def __init__(self, func):
         self.func = func
@@ -62,7 +62,7 @@ class Runnable:
 
 这个类的实现中覆盖了默认的magic方法 `__or__`。另外 `__call__` 也是一个魔法方法，就是可以直接让实例可调用，也就是直接加个括号传递参数就可以执行。我用另外一个例子让大家理解这部分。
 
-```ipython
+```python
 In : class A:
 ...:     def __init__(self, a):
 ...:         self.a = a
@@ -100,7 +100,7 @@ In : b(2)
 
 好了，现在我们回到刚才实现的基础版本，通过下面的例子调用让你感受下运算符的效果。
 
-```
+```python
 def add_ten(x):
     return x + 10
 
@@ -120,7 +120,7 @@ print(result)
 
 我们看例子:
 
-```
+```python
 In : from langchain.prompts import ChatPromptTemplate
 
 In : from langchain_core.runnables import RunnablePassthrough
@@ -142,7 +142,7 @@ Out: ChatPromptValue(messages=[HumanMessage(content='tell me a joke about pig')]
 
 在直觉上，给自定义的类重置`__or__`方法是容易的，但是上面例子前面是字典，不同类型是不可以合并的:
 
-```
+```python
 In : class Runnable:
 ...:     def __init__(self, item):
 ...:         self.item = item
@@ -159,7 +159,7 @@ TypeError: unsupported operand type(s) for |: 'dict' and 'Runnable'
 
 那么CLEL里的效果是怎么实现的呢？如果你看完上一个小节并积极思考过，你可能有个思路，接下来我们看看是不是有正确答案了:
 
-```
+```python
 In []: from langchain_core.runnables.base import indent_lines_after_first
 
 In []: class RunnableSequence:
@@ -207,7 +207,7 @@ Out[]:
 
 是一个是使用内置的图表功能，就是你再写好表达式之后，你可以在invoke前确认是不是符合你的预期，或者在invoke后感觉执行的不对来帮助确认问题原因。我们还是看一开始提的例子:
 
-```
+```python
 In : from langchain.chat_models import ChatOpenAI
 ...: from langchain.prompts import ChatPromptTemplate
 ...: from langchain_core.output_parsers import StrOutputParser
@@ -253,24 +253,20 @@ In : chain.get_graph().print_ascii()
 
 如果你看过官方文档，它就明确提出设计初衷之一就是无缝支持LangSmith追踪。如果链条变得越来越复杂，了解每一步到底发生了什么变得越来越重要。而借助 LCEL，所有步骤都会自动记录到 LangSmith，以实现最大程度的可观察性和可调试性。
 
-我们看一个例子就可以知道目前LangSmith是最好的方案。
-
-我创建了一个叫做 lcel-test的项目，然后按照文档的说明指定环境变量:
-
-```
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
-LANGCHAIN_API_KEY="<your-api-key>"
-LANGCHAIN_PROJECT="lcel-test"
-```
-
-接着再调用就会把trace记录下来:
+我们看一个例子就可以知道目前LangSmith是最好的方案。由于这部分带有操作过程，请直接看本文的[视频观看](https://www.youtube.com/watch?v=c3hATPepiJg)
 
 
 LangSmith未来会是一个付费的产品，不过目前给个人用户每个月500个traces的额度，其实还是够的。这个产品目前应该还是邀请制，你可以考虑来给Langchain贡献代码等方法获取邀请
+
 ### 后记
 
 如果你还有其他不理解的LCEL的用法欢迎留言给我，我可以再来揭秘。
+
+### 视频
+
+import { YouTubeEmbed } from '@next/third-parties/google'
+
+<YouTubeEmbed videoid="c3hATPepiJg"/>
 
 ### 延伸阅读
 

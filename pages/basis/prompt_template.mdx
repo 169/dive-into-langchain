@@ -1,6 +1,6 @@
 在实际使用中，往往无法一开始就完整的准备好请求大语言模型的提示语，最好的实践是用提示模版，可以按照需要动态的生成提示语。在langchain里最常见的就是PromptTemplate:
 
-```
+```python
 In : from langchain_core.prompts import PromptTemplate
 ...:
 
@@ -11,7 +11,7 @@ Out: 'Say bar'
 
 模版在Python语言里也有内置，现在langchain使用的模版格式默认是Python 3.6引入的f-string:
 
-```
+```python
 In : name = "Jane"
 
 In : age = 25
@@ -21,11 +21,12 @@ Out: "Hello, Jane! You're 25 years old."
 ```
 
 它们的语法特点是现在字符串里用一个大括号括起来的变量占位，在计算时传入变量的值就可以获取完整内容。
+
 ### 局部化
 
 在前面已经看到模版的用法，一开始设置一个提示模版，然后最终传入全部参数。但是它还可以更灵活，可以使用partial函数来一步步填充参数。
 
-```
+```python
 In : prompt = PromptTemplate.from_template("Hello, {name}! You're {age} years old.")
 
 In : partial_prompt = prompt.partial(name="Bob")
@@ -36,7 +37,7 @@ Out: "Hello, Bob! You're 25 years old."
 
 使用`partial`方法就可以让name的参数先传入进去，然后在最终只传递age参数就可以了。另外 `partial` 也支持传入函数，因为有时候虽然局部传递了某个或者某些参数，但是需要再最终format时候才计算。我们看个例子:
 
-```
+```python
 from datetime import datetime
 
 
@@ -56,7 +57,7 @@ print(partial_prompt.format(adjective="funny"))
 
 这个里面里date变量的值是在format时才获取的。如果改成注释的这句，就变成执行到这里时就执行，而不是等到format时，这是一个重大的区别，大家需要注意和理解。另外下面的代码和上面例子效果一样:
 
-```
+```python
 prompt = PromptTemplate(
     template="Tell me a {adjective} joke about the day {date}",
     input_variables=["adjective"],
@@ -73,7 +74,7 @@ print(prompt.format(adjective="funny"))
 
 首先是聊天提示模板。我们知道PromptTemplate其实就是字符串模版，而聊天模板会更复杂，因为对话里会多重角色，如系统、用户、助手等。ChatPromptTemplate 由一系列聊天消息组成，每条消息都是一对角色和消息。聊天模型将这些消息作为输入并返回消息作为输出。下面是 ChatPromptTemplate 的示例:
 
-```
+```python
 In : from langchain_core.prompts import ChatPromptTemplate
 ...:
 ...: chat_template = ChatPromptTemplate.from_messages(
@@ -101,7 +102,7 @@ Out:
 
 前面的ChatPromptTemplate生成的消息属于内置的消息类型，我们还可以自定义其他角色:
 
-```
+```python
 In : from langchain_core.prompts import ChatMessagePromptTemplate
 ...:
 ...: prompt = "May the {subject} be with you"
@@ -120,7 +121,7 @@ Out: ChatMessagePromptTemplate(prompt=PromptTemplate(input_variables=['subject']
 
 因为 `PromptTemplate` 和 `ChatPromptTemplate` 已经实现了Runnable接口，所以在LCEL里可以直接使用:
 
-```
+```python
 In : from langchain_core.prompts import PromptTemplate
 
 In : prompt_template = PromptTemplate.from_template(
@@ -147,7 +148,7 @@ Out: "Why don't bears like fast food?\n\nBecause they can't bear the taste!"
 
 其实在一开始就提到默认它使用了f-string风格，大家市面上见到的基本都是这个风格，不过这个风格的最大问题是它单纯的是一个字符串拼接的模版风格，没有更多的表现形式。所以langchain也支持其他风格，例如这部分我们说的jinja2这个模版风格。jinja2是Python语言里知名的Web框架Flask内置的模版风格。我们看一下风格和怎么用:
 
-```
+```python
 In : !pip install jinja2  # 使用之前要先安装它
 In : jinja_prompt = PromptTemplate.from_template(
 ...:     "Tell me a {{adj}} jokes about {% if content %}{{content}}{% else %}yourself{% endif %}",
@@ -163,3 +164,9 @@ Out: 'Tell me a funny jokes about bear'
 可以看到它写起来就比较复杂了。jinja2使用双大括号包裹变量，然后使用大括号加百分号作为一个block区块，里面可以使用判断等更复杂的语法去表达。比如这个例子，他会判断是否传入content，如果不传入就是用yourself，否则就用传入的content作为这部分的参数。这样表现力就很强了。
 
 这个是更进阶的使用方法，jinja2的性能也非常好，所以如果你的提示语很复杂，我建议一定要尝试一下它，去官方系统的学习它的语法，这可以让逻辑的维护性很好。
+
+### 视频
+
+import { YouTubeEmbed } from '@next/third-parties/google'
+
+<YouTubeEmbed videoid="nQX61qSL-uE"/>

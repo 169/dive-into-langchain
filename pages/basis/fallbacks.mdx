@@ -8,7 +8,7 @@
 
  那怎么办呢？我们看一下官方给的例子:
 
-```
+```python
 from langchain_community.chat_models import ChatAnthropic
 from langchain_openai import ChatOpenAI
 
@@ -27,6 +27,7 @@ except RateLimitError:
 ```
 
 这个例子里有2个LLM，主模型是OpenAI，回退模型是Anthropic，整体逻辑的核心就是 `with_fallbacks` 方法。当主 LLM 发生错误时，将在链中调用该“后备”。该功能的行为相当于一个 if 语句。如果调用主 LLM 时发生错误，请尝试调用“后备”LLM。这个例子是非常易于理解的，但我们知道模型输出的差别是很大的，所以事实上不会有产品真的这么用。这么使用的话只可能是自己部署的模型，在多个API服务器之间做个动态故障转移，那比较真实的场景是什么呢？
+
 ### 回退其他APIKEY
 
 如果你没有和官方购买更高速率的APIKEY，那么你请求的速率是有限制的，例如最普通情况一分钟只能请求三次，超了就抛RateLimitError，如果你用langchain的agentexecutor的话，他会默认自己在超时后sleep一段时间重试，但是这个整体执行时间就很慢了。
@@ -35,7 +36,7 @@ except RateLimitError:
 
 而用Langchain的方案会更简单，我给一个例子来帮助理解:
 
-```
+```python
 primary_llm = ChatOpenAI(max_retries=0, api_key="<API_KEY_1>")
 fallback_llm = ChatOpenAI(max_retries=0, api_key="<API_KEY_2>")
 llm = primary_llm.with_fallbacks([fallback_llm])
@@ -52,11 +53,9 @@ except RateLimitError:
 
 回退不是只可以用于解决错误，当然还可以用于优化或者说省钱。先看几个价格表:
 
-![[Screenshot 2024-05-19 at 10.11.36 PM.png]]
-
-![[Screenshot 2024-05-19 at 10.11.11 PM.png]]
-
-![[Screenshot 2024-05-19 at 10.10.31 PM.png]]
+![](https://github.com/langchain-ai/langchain/assets/10000925/88931bb0-b6d9-4fe4-95e2-c3ff22d5fbbc)
+![](https://github.com/langchain-ai/langchain/assets/10000925/4bea085f-9163-43bc-88d6-ac853fde6311)
+![](https://github.com/langchain-ai/langchain/assets/10000925/75c058d7-fea7-4db2-9630-21d38516822a)
 
 结论是，GPT4是GPT3.5的6倍价格，GPT3.5 16K是GPT3.5的6倍价格，GPT4 16K是GPT4的2倍价格。如果可以使用更便宜的模型或者更小的模型尺寸，那么价格就会更便宜。
 
@@ -67,7 +66,7 @@ except RateLimitError:
 
 好了，基于这2个场景，看看用回退怎么实现。官方给了一个时间格式解析的例子:
 
-```
+```python
 from langchain.output_parsers import DatetimeOutputParser
 
 prompt = ChatPromptTemplate.from_template(
@@ -87,7 +86,7 @@ except Exception as e:
 
 在默认情况下大部分异常都会执行回退，这是因为会判断这个异常是否继承了Exception类。但是你也可以指定仅处理某个或者某些异常:
 
-```
+```python
 llm = primary_llm.with_fallbacks(
 [fallback_llm], exceptions_to_handle=(KeyboardInterrupt,)
 )
@@ -99,7 +98,7 @@ llm = primary_llm.with_fallbacks(
 
 回退在LCEL里可以支持更高级别的粒度和控制。我们看个例子:
 
-```
+```python
 from langchain_core.output_parsers import StrOutputParser
 from langchain.prompts import PromptTemplate, ChatPromptTemplate
 
@@ -120,6 +119,12 @@ chain.invoke({"foo": "bears"})
 ```
 
 大家注意，回退是基于链条也就是chain的，所以不同chain内容的细节都可以控制。上例虽然叫bad和good，其实都正常，只是模拟个效果，也就是我可以一方面用Chat模型，另外一方面直接用API，两者都是独立控制的。
+
+### 视频
+
+import { YouTubeEmbed } from '@next/third-parties/google'
+
+<YouTubeEmbed videoid="IlPK2TfUxkg"/>
 
 ### 延伸阅读
 

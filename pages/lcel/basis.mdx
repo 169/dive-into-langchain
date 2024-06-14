@@ -22,13 +22,13 @@ chain.invoke({"foo": "bears"})
 
 这个 | 也不是什么黑魔法，在程序员眼里他有很多种解读，官方文档也提过，这个`|` 符号类似于 unix 管道运算符，它将不同的组件链接在一起，将一个组件的输出作为输入提供给下一个组件。但是我觉得这个说法有点偏颇，我详细分享一下，我们先看linux管道的语法:
 
-```
+```bash
 [command1] | [command2] | [command3] | ...
 ```
 
 它的作用是“获取左侧的对象并将其作为右侧对象的输入”。所以 command2 会接收并处理 command1 的执行结果，而 command3 会再处理 command2 的执行结果的】，以此类推。下面是几个例子:
 
-```
+```bash
 cat sample2.txt | head -7 | tail -5
 cat result.txt | grep "Rajat Dua" | tee file2.txt | wc -l
 find . -name "*.c" -print0 | xargs -0 rm -rf
@@ -37,7 +37,7 @@ find . -name "*.c" -print0 | xargs -0 rm -rf
 
 而|在Python世界主要有2种竖线运算符，第一个是按位或运算符:
 
-```
+```python
 # Bitwise OR operator
 In []: 4 | 7
 Out[]: 7
@@ -45,7 +45,7 @@ Out[]: 7
 
 第二个是字典合并操作符:
 
-```
+```python
 # Union Operator(PEP # 584)
 In []: {'spam': 1} | {'eggs': 2}
 Out[]: {'spam': 1, 'eggs': 2}
@@ -53,7 +53,7 @@ Out[]: {'spam': 1, 'eggs': 2}
 
 Langchain用的叫做字典合并操作符，这么用算是Python世界里比较独树一帜的代码实现方法。回到上面的例子:
 
-```
+```python
 In []: chain = prompt | model | output_parser
 
 In []: chain.first
@@ -130,21 +130,29 @@ stream()：用流的方式获取输出，他不是直接返回结果，而是过
 
 ### 对比
 
-接着我们用几个例子对比一下传统的 LangChain 语法和LCEL的区别来体验下它的强大.这个是仿照官方对比的效果，左边是过去的用法，右边是使用lcel后的效果。
+接着我们用[官网的几个例子](https://python.langchain.com/v0.1/docs/expression_language/why/)对比一下传统的LangChain语法和LCEL的区别来体验下它的强大。左边是过去的用法，右边是使用lcel后的效果:
 
+上面的链接是v1版本中的文档，如果未来不能访问，你可以看这个[备份](https://github.com/langchain-ai/langchain/assets/10000925/285f5566-4953-4b1e-b536-8c2c1700f07b)
 
 ### LECL的优点
 
-接着我分析一下LCEL的优点
+接着我分析一下LCEL的优点:
 
 1. 简化了链条的组成。LCEL用管道的方式会极大的简化了链条的组成，一方面能减少代码量，阅读起来更容易。
 2. 开箱即用。因为它统一了接口，所以每个 LCEL 对象都遵循 Runnable 接口，包含一组标准化的调用方法（invoke、batch、stream、ainvoke 等）。
 3. 统一接口。每个 LCEL 对象都遵循 Runnable 接口，所以继承了对批处理、异步和流式 API 的支持，这样消除了优化语言模型调用的复杂性，提高了开发效率。
 4. 提高扩展能力。Langchain其实最常用的就是做POC，也就是快速做出一个原型做概念验证，在过去写复杂应用和扩展功能都比较有限，我觉得langchain团队做LCEL其中一个重要理由就是提高上限，因为LCEL的灵活定制性高。
 5. 自定义链。这个语法简化了创建自定义链的过程。
+
 ###  LECL的缺点
 
-在社区里并不完全是接受和赞同，也有很多开发者不喜欢它。不喜欢它的理由我感觉主要有一下几种:
+在社区里并不完全是接受和赞同，也有很多开发者不喜欢它。不喜欢它的理由我感觉主要有以下两种:
 
 1. 难懂。Langchian本身是一个抽象程度很高的库，它就类似于Web框架里的Django，很复杂。而LECL是一个在这么已经很抽象的库之上的另一个抽象，其语法令人困惑，很难懂也难以调试。
 2. 这个实现方法并不Pythonic。当然这个有点智者见智仁者见仁，我个人觉得还好。
+
+### 视频
+
+import { YouTubeEmbed } from '@next/third-parties/google'
+
+<YouTubeEmbed videoid="i2WFin9NnwI"/>

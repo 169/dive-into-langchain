@@ -1,9 +1,31 @@
 {
-    "index": "index",
+    "index": "Home",
     "basis": "Basis",
     "lcel": "LCEL",
+    "practices": "Practices",
+    "other": "Other",
+    "related_topic": "Related Topic",
     "github_link": {
-        "title": "Dive into langchain",
+        "title": "Github",
+        "type": "page",
         "href": "https://github.com/169/dive-into-langchain"
+    },
+    "blog": {
+        "title": "Blog",
+        "type": "page",
+        "href": "https://boblin.app",
+        "newWindow": true
+    },
+    "youtube": {
+        "title": "Youtube",
+        "type": "page",
+        "href": "https://www.youtube.com/channel/UCyOTA3hgglp05Yw9JslvAaQ",
+        "newWindow": true
+    },
+    "bilibili": {
+        "title": "Bilibili",
+        "type": "page",
+        "href": "https://space.bilibili.com/1082406125/channel/collectiondetail?sid=2825128",
+        "newWindow": true
     }
 }

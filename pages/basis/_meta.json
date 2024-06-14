@@ -1,5 +1,5 @@
 {
     "prompt_template": "PromptTemplate",
-    "output_parser": "Output Parser",
+    "output_parser": "OutputParser",
     "fallbacks": "Fallbacks"
 }
