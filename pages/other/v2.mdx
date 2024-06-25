@@ -1,0 +1,277 @@
+在今年一月份时Langchain团队发布了第一个稳定版本v0.1，四个月后发布了v0.2，这篇是对v0.2的具体解读。
+
+### 新的文档结构
+
+官方希望把文档内容做的更扁平。现在0.2版本的文档可以分为四个部分，分别是教程、操作指南、概念指南和 API 参考。这种分类方法叫做Diataxis的用于技术文档的分类法:
+
+![](https://huanlin.cc/blog/2024/05/01/documentaion-concepts/images/diataxis.png#center)
+这个组织文档的用法意在解决与文档内容（写什么）、风格（如何写）和架构（如何组织）相关的问题。在Langchain里:
+
+1. 教程是关于如何使用 LangChain 从头到尾构建特定应用程序的分步指南，例如聊天机器人、RAG 应用程序或代理。
+2. 操作指南是有关如何执行特定任务的详细说明指南。这比教程更深入，涵盖了更高级的主题。
+3. 概念指南是一个方便的术语表和不同技术的列表。
+4. API 文档包含详细的技术参考文档。
+
+我目前的学习方法是先看一下概念，然后看操作指南，对这些术语和组件都有了基本了解之后再看教程和API文档。不过由于我是从v1开始看文档，更喜欢之前的结构方式，现在官方也在讨论区征集对文档的反馈，大家有想法建议的可以去提一下，链接我放在最后了。
+
+### 版本化文档
+
+文档的另外一个变化是版本化，很多知名开源项目都是分版本的。在之前langchain的文档是一个整体，它会根据项目迭代改文档，但是文档就一份，除了翻代码，没有好的办法获取之前某个时间点的某个被删除或者修改的文档，所以设计成不同版本的文档分开，现在可以在v0.1和v0.2这2个版本里自由切换。
+
+### LangGraph 代理
+
+Langchain在之前一直有个问题，就是很难定制预建链和代理(Agent)的内部结构。所以去年Langchain引入了 LCEL 来解决链的问题，使用LCEL可以细粒度的定制链或者链的组合。但是代理始终基于 AgentExecutor，基本上无法融合LCEL。它的问题在于他是一个单类，需要向它添加了越来越多的参数来支持不断发展的代理，但它不是真正可组合的，因为agent跑起来的以后这个流程是无法控制和配置的。
+
+所以Langchain设计了LangGraph，你可以理解它是“Agent的 LCEL”。
+
+在v0.2开始，LangGraph会逐渐替代旧的 AgentExecutor。所以使用预构建的 LangGraph 对象，会更容易定制和修改。
+
+当然这么说可能让大家感受不到。我准备了一个目前基于LCEL用旧的AgentExecutor实现的例子。代码有点长，Agent本来就是Langchain里高于Chain的最复杂的一个用法，所以为了好理解，我把例子拆分成三部分:
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain.agents import tool
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """Multiply two numbers."""
+    return a * b
+@tool
+def add(a: int, b: int) -> int:
+    """Plus two numbers."""
+    return a + b
+tools = [multiply, add]
+
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+llm_with_tools = llm.bind_tools(tools)
+```
+
+首先定义2个tools，分别表示在相加和相乘时候告诉OpenAI要怎么处理。`llm.bind_tools` 就是把工具跟语言模型绑定。
+
+```python
+from langchain_core.prompts import MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
+
+prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a very powerful assistant, but don't know how to calculate",
+    ),
+    ("user", "{input}"),
+    MessagesPlaceholder(variable_name="agent_scratchpad"),
+])
+```
+
+接着实现一个Chat类型的提示模版，在这里面的系统消息里去掉了大语言模型的计算功能，防止他给答案，而是用tool来完成计算。`MessagesPlaceholder` 是一个特殊的提示模板，每次调用将替换为传递的消息。Agent 会用 `agent_scratchpad` 存储中间过程，例如 Agent 此次的任务已经执行过那些步骤以及步骤的输出等，这样 Agent 才会知道哪些步骤已经做过。
+
+```python
+agent = (
+    {
+        "input": lambda x: x["input"],
+        "agent_scratchpad": lambda x: format_to_openai_tool_messages(
+            x["intermediate_steps"]
+        ),
+    }
+    | prompt
+    | llm_with_tools
+    | OpenAIToolsAgentOutputParser()
+)
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+```
+
+最后就是实现agent，这个是目前LCEL能做到的最多支持，首先预留了2个参数，然后使用提示模版，再加上llm，最后使用`OpenAIToolsAgentOutputParser`解析输出。然后把tools和agent作为参数就可以创建一个 `agent_executor`。需要注意的是，我们使用了 `format_to_openai_tool_messages` 这个转化方式格式化成OpenAI所需要的格式，这样就获取OpenAI告诉我们下一步的行为。另外，langchain其实实现了`langchain.agents import create_openai_functions_agent`用于创建这种openai function的agent，我这里把代码写出来是为了大家更直观的感受到LCEL，平时写代码大家不用写这么一大堆，其实就一句可以:
+
+```python
+from langchain.agents import create_openai_functions_agent
+
+agent = create_openai_functions_agent(llm, tools, prompt)
+```
+
+注意，咱们绑定tool是独立做的，而这个实现里直接传工具集即可。好的，回到正题，接下来就运行一下它:
+
+```python
+In : agent_executor.invoke({'input': "2 * 3 equal ?"})
+
+
+> Entering new AgentExecutor chain...
+
+Invoking: `multiply` with `{'a': 2, 'b': 3}`
+
+
+6The result of 2 multiplied by 3 is 6.
+
+> Finished chain.
+Out: {'input': '2 * 3 equal ?', 'output': 'The result of 2 multiplied by 3 is 6.'}
+
+In : agent_executor.invoke({'input': "2 + 3 equal ?"})
+
+
+> Entering new AgentExecutor chain...
+
+Invoking: `add` with `{'a': 2, 'b': 3}`
+
+
+5
+Invoking: `multiply` with `{'a': 2, 'b': 3}`
+
+
+6The sum of 2 + 3 is 5, and the product of 2 * 3 is 6.
+
+> Finished chain.
+Out:
+{'input': '2 + 3 equal ?',
+ 'output': 'The sum of 2 + 3 is 5, and the product of 2 * 3 is 6.'}
+```
+
+可以看到，上述计算基于我实现的2个工具，理解能力满分。但是请一定要明白，由于例子里给的工具集优先，它只能处理加法和乘法，对其他的就完全不理解了(因为在系统消息我告诉它不会计算):
+
+```python
+In : agent_executor.invoke({'input': "20 / 4 equal ?"})
+
+
+> Entering new AgentExecutor chain...
+
+Invoking: `multiply` with `{'a': 20, 'b': 4}`
+
+
+80The result of 20 divided by 4 is 80.
+
+> Finished chain.
+Out: {'input': '20 / 4 equal ?', 'output': 'The result of 20 divided by 4 is 80.'}
+```
+
+所以写个除法计算就错了。
+
+接着我们看一下LangGraph如何实现同样的功能。为了方便对比，`agent_executor` 之前的代码是一样的，其实就是最后一行代码的扩展能力。大家做好准备，看看就本来一行的效果，现在能扩展出什么。为了方便大家理解，我还是分成三部分。
+
+```python
+import operator
+from typing import Annotated, TypedDict, Union
+
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.messages import BaseMessage
+
+
+class AgentState(TypedDict):
+    input: str
+    agent_outcome: Union[AgentAction, AgentFinish, None]
+    intermediate_steps: Annotated[list[tuple[AgentAction, str]], operator.add]
+```
+
+库既然叫LangGraph，那么自然是有Graph图的体现，首先展示的是对于状态的定义，这里会记录中间过程和Agent的响应，换个角度，你可以在agent执行过程中记录状态和其变化。
+
+```python
+from langchain_core.agents import AgentFinish
+
+from langgraph.prebuilt.tool_executor import ToolExecutor
+
+tool_executor = ToolExecutor(tools)
+
+def run_agent(data):
+    inputs = data.copy()
+    if len(inputs["intermediate_steps"]) > 5:
+        inputs["intermediate_steps"] = inputs["intermediate_steps"][-5:]
+    agent_outcome = agent_runnable.invoke(inputs)
+    return {"agent_outcome": agent_outcome}
+
+def execute_tools(data):
+    agent_action = data["agent_outcome"]
+    if isinstance(agent_action, list):
+        agent_action = agent_action[0]
+    output = tool_executor.invoke(agent_action)
+    return {"intermediate_steps": [(agent_action, str(output))]}
+
+def should_continue(data):
+    if isinstance(data["agent_outcome"], AgentFinish):
+        return "end"
+    else:
+        return "continue"
+```
+
+接着是定义图的节点，也就是决定如何采用条件边的函数。`run_agent`仅查看最后五个中间步骤，`execute_tools`和官网的例子是有区别的，主要是为了兼容我前面写的代码，然后在执行完工具后会记录中间步骤，`should_continue`函数用于确实是继续还是结束。
+
+接着就是定义图了:
+
+```python
+from langgraph.graph import END, StateGraph
+
+workflow = StateGraph(AgentState)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", run_agent)
+workflow.add_node("action", execute_tools)
+
+workflow.set_entry_point("agent") # 从 run_agent 开始
+
+workflow.add_conditional_edges(
+    "agent",
+    should_continue,
+    {
+        "continue": "action",
+        "end": END,
+    },
+)
+
+workflow.add_edge("action", "agent")
+
+app = workflow.compile()
+```
+
+这里用了一个工作流的概念，它确定了怎么开始执行，是否要下一步，其中`add_conditional_edges`的参数是很重要的，在`should_continue`设置的返回值会确定下一步应该选哪个节点。
+
+Ok，现在就可以执行了:
+
+```python
+In : app.invoke({'input': "2 * 3 equal ?"})
+Out:
+{'input': '2 * 3 equal ?',
+ 'agent_outcome': AgentFinish(return_values={'output': 'The result of 2 multiplied by 3 is 6.'}, log='The result of 2 multiplied by 3 is 6.'),
+ 'intermediate_steps': [(OpenAIToolAgentAction(tool='multiply', tool_input={'a': 2, 'b': 3}, log="\nInvoking: `multiply` with `{'a': 2, 'b': 3}`\n\n\n", message_log=[AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_8Dwc5kB0Xbx1vgAHo9rLd2Em', 'function': {'arguments': '{"a":2,"b":3}', 'name': 'multiply'}, 'type': 'function'}]}, response_metadata={'token_usage': {'completion_tokens': 17, 'prompt_tokens': 87, 'total_tokens': 104}, 'model_name': 'gpt-3.5-turbo-0125', 'system_fingerprint': None, 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-353723b7-c4b5-4be4-a59e-d9b650b49f22-0', tool_calls=[{'name': 'multiply', 'args': {'a': 2, 'b': 3}, 'id': 'call_8Dwc5kB0Xbx1vgAHo9rLd2Em'}], usage_metadata={'input_tokens': 87, 'output_tokens': 17, 'total_tokens': 104})], tool_call_id='call_8Dwc5kB0Xbx1vgAHo9rLd2Em'),
+   '6')]}
+
+In : app.invoke({'input': "2 + 3 equal ?"})['agent_outcome'].return_values
+Out: {'output': '2 + 3 equals 5.'}
+```
+
+使用了LangGraph，可以让这个工作流的执行的每个环节都可控。我这里展示的是完全自定义，而不是用它已经预构建的方法，这样更能体现它的控制能力。LangGraph是一个独立的主题，之后我会专门介绍它。
+
+### import代码的迁移
+
+官方提供了命令行的方式帮助开发者把代码迁移到`0.2.x`版本，因为从0.2版本开始，官方希望把`langchain-community`从Langchain的依赖中去除，虽然目前并没有强制，但是提供了替换成新的导入的迁移功能，首先是安装 `0.0.22`及以上版本的`langchain-cli`:
+
+```bash
+➜ pip install -q langchain-cli
+➜ langchain-cli --version
+langchain-cli 0.0.22rc0
+```
+
+可以看一个简单的例子:
+
+```bash
+➜ cat main.py
+from langchain.chat_models import ChatOpenAI
+➜ langchain-cli migrate main.py
+➜ cat main.py
+from langchain_community.chat_models import ChatOpenAI
+➜ langchain-cli migrate main.py
+➜ cat main.py
+from langchain_openai import ChatOpenAI
+```
+
+首先我们用过去的用法写一个代码文件，第一次迁移会改成 `langchain_community` 包，第二次会改成partner的包的了。当然这个迁移脚本也有局限，你还是需要人工验证和修改一些特例，例如试用了`as`。
+
+### 视频
+
+import { YouTubeEmbed } from '@next/third-parties/google'
+
+<YouTubeEmbed videoid="afbF0qF2D_0"/>
+
+### 延伸阅读
+
+1. https://blog.langchain.dev/documentation-refresh-for-langchain-v0-2/
+2. https://github.com/langchain-ai/langchain/discussions/21716
+3. https://blog.langchain.dev/langchain-v02-leap-to-stability/
+4. https://diataxis.fr/
+5. https://github.com/langchain-ai/langgraph/blob/main/examples/agent_executor/base.ipynb
+6. https://python.langchain.com/v0.2/docs/versions/v0_2/
